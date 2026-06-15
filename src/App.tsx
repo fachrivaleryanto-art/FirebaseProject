@@ -343,8 +343,8 @@ export default function App() {
           <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-neon-cyan to-neon-pink shadow-[0_0_15px_rgba(0,242,255,0.5)] flex items-center justify-center">
             <Cpu className="w-5 h-5 text-white" />
           </div>
-          <div className="text-xl md:text-2xl font-bold tracking-wide bg-gradient-to-r from-white to-neon-cyan text-transparent bg-clip-text">
-            NEXUS SMART HOME
+          <div className="text-xl md:text-2xl font-bold tracking-wide bg-gradient-to-r from-red-500 to-blue-500 text-transparent bg-clip-text">
+            MyPertamina
           </div>
         </div>
         

@@ -52,8 +52,8 @@ export default function Login() {
           <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-neon-cyan to-neon-pink shadow-[0_0_20px_rgba(0,242,255,0.4)] flex items-center justify-center mb-5">
             <Cpu className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-2xl font-bold tracking-wide bg-gradient-to-r from-white to-neon-cyan text-transparent bg-clip-text text-center">
-            NEXUS SMART HOME
+          <h1 className="text-2xl font-bold tracking-wide bg-gradient-to-r from-red-500 to-blue-500 text-transparent bg-clip-text text-center">
+            MyPertamina
           </h1>
           <p className="text-[11px] text-gray-400 mt-2 tracking-widest uppercase opacity-80">
             Identity Verification Required
