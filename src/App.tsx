@@ -4,7 +4,7 @@ import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { Toaster, toast } from 'react-hot-toast';
 import { 
   Power, Thermometer, Droplets, Mic, MicOff, 
-  Wifi, WifiOff, Clock, Activity, Cpu, Terminal, BookOpen, Zap, AlertTriangle, LogOut
+  Wifi, WifiOff, Clock, Activity, Cpu, Terminal, BookOpen, Zap, AlertTriangle, LogOut, User as UserIcon
 } from 'lucide-react';
 import { format } from 'date-fns';
 import Login from './components/Login';
@@ -45,6 +45,7 @@ export default function App() {
   const recognitionRef = useRef<any>(null);
   const patternIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   const addLog = (message: string, type: 'info' | 'success' | 'warning' | 'error' = 'info') => {
     setLogs(prev => {
@@ -71,6 +72,12 @@ export default function App() {
       setUser(currentUser);
       setAuthLoading(false);
     });
+    
+    // Load voices list proactively to avoid empty getVoices() on first call
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.getVoices();
+    }
+    
     return () => unsubscribe();
   }, []);
 
@@ -162,29 +169,80 @@ export default function App() {
       });
   };
 
+  const speakResponse = (text: string) => {
+    if ('speechSynthesis' in window) {
+      // Tambahkan jeda waktu agar mic benar-benar mati sebelum suara mulai, mencegah loop balik ke mic
+      setTimeout(() => {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'id-ID';
+        utterance.rate = 1.0;
+        utterance.pitch = 1.0;
+        
+        // Simpan referensi ke state/ref. Di Chrome, jika utterance termakan garbage collection sebelum selesai, suara akan berhenti di tengah-tengah.
+        utteranceRef.current = utterance;
+        
+        // Cari dan set voice bahasa Indonesia jika tersedia di browser
+        const voices = window.speechSynthesis.getVoices();
+        const indoVoice = voices.find(v => v.lang.includes('id') || v.lang.includes('ID'));
+        if (indoVoice) {
+          utterance.voice = indoVoice;
+        }
+        
+        window.speechSynthesis.speak(utterance);
+      }, 400); 
+    }
+  };
+
   const processVoiceCommand = (command: string) => {
-    const cmd = command.toLowerCase();
-    addLog(`Voice Input: "${command}"`, 'info');
+    // Normalisasi spasi dan hapus tanda baca yang mungkin dikirim oleh API
+    const cmd = command.toLowerCase().replace(/[.,!?]/g, '').replace(/\s+/g, ' ').trim();
+    addLog(`Voice Input: "${cmd}"`, 'info');
     
     // Stop pattern if voice override
     if (activePattern) stopPattern();
     
     let matched = false;
+    let responseText = "";
 
-    // Switch map for single relays
+    const numMap: Record<number, string[]> = {
+      1: ['1', 'satu'],
+      2: ['2', 'dua'],
+      3: ['3', 'tiga'],
+      4: ['4', 'empat']
+    };
+
+    // Check individual relays
     for (let i = 1; i <= 4; i++) {
         const key = `relay${i}` as keyof RelayData;
-        if (cmd.includes(`nyalakan lampu ${i}`) || cmd.includes(`hidupkan lampu ${i}`)) {
+        const nums = numMap[i];
+        
+        const isOn = nums.some(n => 
+          cmd.includes(`nyalakan lampu ${n}`) || 
+          cmd.includes(`hidupkan lampu ${n}`) || 
+          cmd.includes(`nyalain lampu ${n}`) ||
+          cmd.includes(`nyala lampu ${n}`)
+        );
+        
+        const isOff = nums.some(n => 
+          cmd.includes(`matikan lampu ${n}`) || 
+          cmd.includes(`matiin lampu ${n}`) ||
+          cmd.includes(`mati lampu ${n}`)
+        );
+
+        if (isOn) {
             set(ref(database, `relay/${key}`), 1);
             toast.success(`Lampu ${i} menyala`);
             addLog(`Voice Command Executed: Lamp ${i} ON`, 'success');
+            responseText = `Lampu ${i} telah dinyalakan.`;
             matched = true;
             break;
         }
-        if (cmd.includes(`matikan lampu ${i}`)) {
+        if (isOff) {
             set(ref(database, `relay/${key}`), 0);
             toast.success(`Lampu ${i} mati`);
             addLog(`Voice Command Executed: Lamp ${i} OFF`, 'success');
+            responseText = `Lampu ${i} telah dimatikan.`;
             matched = true;
             break;
         }
@@ -192,24 +250,49 @@ export default function App() {
 
     if (!matched) {
         // Switch all
-        if (cmd.includes('nyalakan semua') || cmd.includes('hidupkan semua')) {
+        if (cmd.includes('nyalakan semua') || cmd.includes('hidupkan semua') || cmd.includes('nyalain semua')) {
             set(ref(database, 'relay'), { relay1: 1, relay2: 1, relay3: 1, relay4: 1 });
             toast.success('Semua Lampu Menyala!');
             addLog('Voice Command Executed: ALL ON', 'success');
+            responseText = 'Semua lampu telah dinyalakan.';
             matched = true;
         }
-        else if (cmd.includes('matikan semua')) {
+        else if (cmd.includes('matikan semua') || cmd.includes('matiin semua')) {
             set(ref(database, 'relay'), { relay1: 0, relay2: 0, relay3: 0, relay4: 0 });
             toast.success('Semua Lampu Mati!');
             addLog('Voice Command Executed: ALL OFF', 'success');
+            responseText = 'Semua lampu telah dimatikan.';
             matched = true;
         }
-        else if (cmd.includes('mode kedip') || cmd.includes('pola 1')) {
+        else if (cmd.includes('mode kedip') || cmd.includes('pola 1') || cmd.includes('pola satu')) {
             startPattern(1);
+            responseText = 'Mode kedip diaktifkan.';
             matched = true;
         }
-        else if (cmd.includes('mode polisi') || cmd.includes('pola 2')) {
+        else if (cmd.includes('mode polisi') || cmd.includes('pola 2') || cmd.includes('pola dua')) {
             startPattern(2);
+            responseText = 'Mode polisi diaktifkan.';
+            matched = true;
+        }
+        else if (cmd.includes('matikan pola') || cmd.includes('matikan mode') || cmd.includes('stop pola') || cmd.includes('stop mode')) {
+            stopPattern();
+            responseText = 'Pola lampu telah dimatikan.';
+            toast.success('Pola dimatikan');
+            matched = true;
+        }
+    }
+    
+    // Check for sensors
+    if (!matched) {
+        if (cmd.includes('suhu') || cmd.includes('temperatur') || cmd.includes('panas')) {
+            responseText = `Suhu ruangan saat ini adalah ${sensors.temperature} derajat celcius, dan kelembaban ${sensors.humidity} persen.`;
+            toast.success('Informasi Suhu & Kelembaban');
+            addLog('Voice Command Executed: Check Sensors', 'success');
+            matched = true;
+        } else if (cmd.includes('kelembapan') || cmd.includes('kelembaban') || cmd.includes('lembab')) {
+            responseText = `Kelembaban ruangan saat ini adalah ${sensors.humidity} persen, dan suhu ${sensors.temperature} derajat celcius.`;
+            toast.success('Informasi Kelembaban');
+            addLog('Voice Command Executed: Check Sensors', 'success');
             matched = true;
         }
     }
@@ -217,6 +300,11 @@ export default function App() {
     if (!matched) {
         toast.error(`Perintah tidak dikenal`);
         addLog('Voice Command Unrecognized', 'warning');
+        responseText = 'Maaf, perintah tidak dikenali.';
+    }
+
+    if (responseText) {
+        speakResponse(responseText);
     }
   };
 
@@ -226,6 +314,14 @@ export default function App() {
       setIsListening(false);
       addLog('Voice engine stopped manually', 'info');
       return;
+    }
+
+    // Warm-up SpeechSynthesis (Bypass Browser Autoplay Policy)
+    // Melakukan pancingan suara kosong di aksi klik user untuk membuka izin akses audio TTS
+    if ('speechSynthesis' in window) {
+      const unlockUtterance = new SpeechSynthesisUtterance('');
+      unlockUtterance.volume = 0;
+      window.speechSynthesis.speak(unlockUtterance);
     }
 
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -273,20 +369,29 @@ export default function App() {
     setActivePattern(patternId);
     
     if (patternId === 1) { // Kedip Semua
-      let status = 0;
+      let status = 1; // Start with ON
       addLog('Pattern 1 (Blink All) Activated', 'info');
+      
+      // Execute immediately on start
+      const newRelays = { relay1: 1, relay2: 1, relay3: 1, relay4: 1 };
+      set(ref(database, 'relay'), newRelays);
+      
       patternIntervalRef.current = setInterval(() => {
         status = status === 0 ? 1 : 0;
         set(ref(database, 'relay'), { relay1: status, relay2: status, relay3: status, relay4: status });
-      }, 800);
+      }, 1000);
     } else if (patternId === 2) { // Mode Polisi
       let toggle = true;
       addLog('Pattern 2 (Police Lights) Activated', 'info');
+      
+      // Execute immediately on start
+      set(ref(database, 'relay'), { relay1: 1, relay2: 1, relay3: 0, relay4: 0 });
+      
       patternIntervalRef.current = setInterval(() => {
         if (toggle) {
-            set(ref(database, 'relay'), { relay1: 1, relay2: 1, relay3: 0, relay4: 0 });
-        } else {
             set(ref(database, 'relay'), { relay1: 0, relay2: 0, relay3: 1, relay4: 1 });
+        } else {
+            set(ref(database, 'relay'), { relay1: 1, relay2: 1, relay3: 0, relay4: 0 });
         }
         toggle = !toggle;
       }, 500);
@@ -354,8 +459,23 @@ export default function App() {
           </div>
           <div className="flex items-center gap-2">
             <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-neon-green shadow-[0_0_8px_var(--color-neon-green)]' : 'bg-red-500 shadow-[0_0_8px_red]'}`}></div>
-            <span className="text-xs mt-0.5">{isConnected ? 'FIREBASE ONLINE' : 'OFFLINE'}</span>
+            <span className="text-xs mt-0.5 hidden md:inline">{isConnected ? 'FIREBASE ONLINE' : 'OFFLINE'}</span>
           </div>
+
+          {/* Profile Picture */}
+          <div className="flex items-center gap-2 border-l border-white/10 pl-5 ml-2">
+            {user.photoURL ? (
+              <img src={user.photoURL} alt="Profile" className="w-8 h-8 rounded-full border border-white/20 object-cover" referrerPolicy="no-referrer" />
+            ) : (
+              <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center border border-white/20">
+                <UserIcon className="w-4 h-4 text-gray-400" />
+              </div>
+            )}
+            <div className="hidden lg:block text-xs text-gray-300 max-w-[120px] truncate">
+              {user.displayName || user.email?.split('@')[0]}
+            </div>
+          </div>
+
           <button 
             onClick={() => setShowGuide(!showGuide)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 transition-colors"
@@ -558,12 +678,20 @@ export default function App() {
                             <ul className="list-disc pl-5 space-y-1 opacity-80">
                                 <li>"Mode kedip" atau "Pola 1"</li>
                                 <li>"Mode polisi" atau "Pola 2"</li>
+                                <li>"Matikan pola" atau "Stop mode"</li>
+                            </ul>
+                        </div>
+                        <div>
+                            <div className="text-neon-cyan font-semibold mb-1">Perintah Suara - Info Sensor:</div>
+                            <ul className="list-disc pl-5 space-y-1 opacity-80">
+                                <li>"Cek suhu" atau "Berapa suhunya"</li>
+                                <li>"Cek kelembaban"</li>
                             </ul>
                         </div>
                         
                         <div className="mt-4 border-t border-white/10 pt-4">
                             <div className="text-neon-green font-semibold mb-2">Kode Snippet ESP32 (Arduino IDE)</div>
-                            <div className="text-xs opacity-70 mb-2">Gunakan library `Firebase_ESP_Client` dan `DHT sensor library`. Pastikan pin sesuai rekayasa Anda.</div>
+                            <div className="text-xs opacity-70 mb-2">Gunakan library `Firebase_ESP_Client` dan `DHT sensor library`. Pastikan delay loop jangan terlalu lama agar bisa mengikuti pola kedip.</div>
                             <pre className="bg-black/50 p-4 rounded-xl border border-white/10 text-xs text-neon-green font-mono overflow-x-auto">
 {`#include <WiFi.h>
 #include <Firebase_ESP_Client.h>
@@ -582,6 +710,10 @@ FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
 
+// Timer untuk non-blocking sensor read
+unsigned long previousMillis = 0;
+const long interval = 2000; // Baca sensor setiap 2 detik
+
 void setup() {
   Serial.begin(115200);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -596,22 +728,27 @@ void setup() {
 }
 
 void loop() {
-  // --- Baca Sensor ---
-  float t = dht.readTemperature();
-  float h = dht.readHumidity();
-  
-  if (!isnan(t) && !isnan(h)) {
-    Firebase.RTDB.setFloat(&fbdo, "/sensor/temperature", t);
-    Firebase.RTDB.setFloat(&fbdo, "/sensor/humidity", h);
+  unsigned long currentMillis = millis();
+
+  // --- Baca Sensor (Non-blocking, setup 2 detik sekali) ---
+  if (currentMillis - previousMillis >= interval) {
+    previousMillis = currentMillis;
+    float t = dht.readTemperature();
+    float h = dht.readHumidity();
+    
+    if (!isnan(t) && !isnan(h)) {
+      Firebase.RTDB.setFloat(&fbdo, "/sensor/temperature", t);
+      Firebase.RTDB.setFloat(&fbdo, "/sensor/humidity", h);
+    }
   }
 
-  // --- Baca Relay (contoh untuk relay1) ---
+  // --- Baca Relay (Cepa/Realtime) ---
   if (Firebase.RTDB.getInt(&fbdo, "/relay/relay1")) {
      int state = fbdo.intData();
      // digitalWrite(RELAY1_PIN, state ? HIGH : LOW);
   }
   
-  delay(2000);
+  delay(100); // 100ms delay untuk respons pattern yang mulus
 }`}
                             </pre>
                         </div>
